@@ -50,16 +50,12 @@ git config --global http.lowSpeedLimit 0
 git config --global http.lowSpeedTime 999999
 git config --global core.compression 0
 
-# 5. 终端运行时源码与产物
+# 5. 终端运行时：4 个源码包已随仓库提交（SHA256 与原脚本一致），不再联网下载
 R=tools/android-runtime
-mkdir -p "$R/downloads" "$R/sources"
-for url in \
-  https://busybox.net/downloads/busybox-1.38.0.tar.bz2 \
-  https://github.com/termux/proot/archive/refs/tags/v5.1.107.78.tar.gz \
-  https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz \
-  https://ftp.gnu.org/gnu/bash/bash-5.2.37.tar.gz; do
-    curl -fsSL --retry 3 --retry-delay 3 -o "$R/downloads/${url##*/}" "$url"
-    tar -xf "$R/downloads/${url##*/}" -C "$R/sources"
+mkdir -p "$R/sources"
+for archive in busybox-1.38.0.tar.bz2 termux-proot-v5.1.107.78.tar.gz \
+               talloc-2.4.3.tar.gz bash-5.2.37.tar.gz; do
+    tar -xf "$R/downloads/$archive" -C "$R/sources"
 done
 NDK29="$HOME/.cache/operit-android-runtime/android-ndk-r29-beta4"
 ANDROID_NDK_HOME="$NDK29" bash tools/android-runtime/build_android_tools_wsl.sh
