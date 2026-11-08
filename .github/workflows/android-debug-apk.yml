@@ -185,8 +185,39 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('apps/flutter/app/android/**/*.gradle*') }}
           restore-keys: gradle-${{ runner.os }}-
 
+      # build.gradle.kts 在配置阶段就无条件创建 release signingConfig 并读取
+      # 4 个属性，缺任何一个都会抛 "Missing Android release signing property"，
+      # 哪怕构建的是 debug 变体。这里生成一次性自签名 keystore 填进去，
+      # 让配置阶段通过；debug 变体实际不会用它（只有 release 绑定了 signingConfig）。
+      - name: Provision throwaway signing properties
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:GITHUB_WORKSPACE ".tmp"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $store = Join-Path $dir "debug-only.keystore"
+          & "$env:JAVA_HOME\bin\keytool.exe" -genkeypair -v `
+            -keystore "$store" -storetype PKCS12 `
+            -alias operitdebug -keyalg RSA -keysize 2048 -validity 10000 `
+            -storepass android -keypass android `
+            -dname "CN=Operit Debug Only, O=Local, C=CN"
+          if (-not (Test-Path $store)) { throw "keytool did not create $store" }
+          # Windows 路径写进 .properties 需转成正斜杠，避免反斜杠被当转义符。
+          $storePosix = $store.Replace('\', '/')
+          $propsFile = "apps/flutter/app/android/local.properties"
+          if (-not (Test-Path $propsFile)) {
+            New-Item -ItemType File -Force -Path $propsFile | Out-Null
+          }
+          # 只追加这 4 行，不覆盖文件里其它键（如 flutter.sdk）。
+          Add-Content -Path $propsFile -Encoding utf8 -Value @(
+            "RELEASE_STORE_FILE=$storePosix",
+            "RELEASE_STORE_PASSWORD=android",
+            "RELEASE_KEY_ALIAS=operitdebug",
+            "RELEASE_KEY_PASSWORD=android"
+          )
+          Get-Content $propsFile
+
       # Gradle 会自动串起 syncOperitPlugins → prepareOperitAndroidV8 →
-      # cargo build → 打包。debug 变体用 AGP 默认 debug keystore，无需签名配置。
+      # cargo build → 打包。
       - name: Build debug APK
         working-directory: apps/flutter/app
         shell: pwsh
