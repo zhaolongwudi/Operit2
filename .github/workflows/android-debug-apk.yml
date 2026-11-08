@@ -177,6 +177,24 @@ jobs:
           if (-not (Test-Path $tsc)) { throw "tsc not installed at $tsc" }
           & $tsc --version
 
+      # Flutter 侧 lib/core/proxy/generated/*.g.dart 由该 crate 的 build.rs
+      # 调用 operit-proxy-dart-codegen 生成，不生成则 flutter 编译报
+      # "Error when reading CoreProxyClients.g.dart"。
+      # 先同步插件资源：cargo check 会编译 operit-runtime，其 build.rs 断言
+      # 插件资源与 plugins/packages 一致，未同步会 panic。
+      - name: Sync plugin packages
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe plugins\tools\sync_plugin_packages.py --source runtime --no-hot-reload
+
+      - name: Generate Dart proxy codegen
+        shell: pwsh
+        run: |
+          cargo check --manifest-path core/crates/proxy/local/Cargo.toml
+          $gen = "apps/flutter/app/lib/core/proxy/generated"
+          if (-not (Test-Path $gen)) { throw "Dart proxy codegen did not produce $gen" }
+          Get-ChildItem $gen | Select-Object -First 10 Name
+
       # V8 源码编译是最贵的一步，缓存 Rust bridge 与构建工具。
       - name: Cache Rust bridge target
         uses: actions/cache@v4
