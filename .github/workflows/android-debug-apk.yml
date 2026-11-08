@@ -1,7 +1,14 @@
-# Operit2 Android Debug APK 自动构建
+# Operit2 Android Debug APK 自动构建（自用，不发行）
 # - push 到 main 自动触发，也可在 Actions 页面手动触发
-# - 产出免签名的 debug APK（无需配置任何签名 secret）
+# - 产出免签名 debug APK（无需配置任何签名 secret）
 # - 构建成功后自动发布到 GitHub Releases
+#
+# 关键前提（来自 apps/flutter/app/android/app/build.gradle.kts）：
+#   Gradle 的 syncOperitPlugins / prepareOperitAndroidV8 任务硬编码调用
+#   仓库根目录的 .venv Python（.venv/Scripts/python.exe），因此必须先建好
+#   该虚拟环境，否则这两个任务失败。
+#   不要手工跑 cargo check：它绕过 syncOperitPlugins，会触发
+#   operit-runtime/build.rs 的插件资源断言而 panic。
 name: android-debug-apk
 
 on:
@@ -71,11 +78,12 @@ jobs:
   build-android:
     needs: build-android-runtime
     runs-on: windows-2025
-    timeout-minutes: 90
+    timeout-minutes: 120
     env:
       RUSTFLAGS: -Awarnings
       RUST_TOOLCHAIN_VERSION: 1.95.0
       FVM_VERSION: 4.3.0
+      OPERIT_LIBCLANG_DIR: ${{ github.workspace }}\target\operit-build-tools\libclang.runtime.win-x64.21.1.8\runtimes\win-x64\native
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -101,6 +109,21 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Gradle 硬编码 .venv/Scripts/python.exe，必须先创建。
+      - name: Create .venv for Gradle plugin sync
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip --quiet
+          if (-not (Test-Path .\.venv\Scripts\python.exe)) {
+            throw "Gradle expects .venv/Scripts/python.exe"
+          }
 
       - name: Install FVM
         shell: pwsh
@@ -139,16 +162,32 @@ jobs:
         shell: pwsh
         run: |
           corepack enable
-          corepack pnpm --version
           Push-Location plugins/packages/buildin/workflow
           corepack pnpm install --frozen-lockfile
           Pop-Location
 
-      - name: Generate Dart proxy codegen
-        shell: pwsh
-        run: cargo check --manifest-path core/crates/proxy/local/Cargo.toml --quiet
+      # V8 源码编译是最贵的一步，缓存 Rust bridge 与构建工具。
+      - name: Cache Rust bridge target
+        uses: actions/cache@v4
+        with:
+          path: |
+            apps/flutter/native/operit-flutter-bridge/target
+            target/operit-build-tools
+          key: rust-bridge-${{ runner.os }}-${{ hashFiles('apps/flutter/native/operit-flutter-bridge/Cargo.lock', 'tools/build_scripts/prepare_android_v8.py') }}
+          restore-keys: rust-bridge-${{ runner.os }}-
 
-      - name: Build debug APK (no signing required)
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('apps/flutter/app/android/**/*.gradle*') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      # Gradle 会自动串起 syncOperitPlugins → prepareOperitAndroidV8 →
+      # cargo build → 打包。debug 变体用 AGP 默认 debug keystore，无需签名配置。
+      - name: Build debug APK
         working-directory: apps/flutter/app
         shell: pwsh
         run: |
@@ -174,6 +213,6 @@ jobs:
           SHORT_SHA="$(git rev-parse --short HEAD)"
           gh release create "$TAG" \
             --title "Android Debug APK $TAG" \
-            --notes "自动构建的免签名 debug APK（arm64-v8a）。上游 main @ $SHORT_SHA" \
+            --notes "自动构建的免签名 debug APK（arm64-v8a）。源码 @ $SHORT_SHA" \
             --target main
           gh release upload "$TAG" "$APK"
