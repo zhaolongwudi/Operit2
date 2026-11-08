@@ -22,6 +22,9 @@ echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-21 main" | sudo tee /e
 sudo apt-get update -qq
 sudo apt-get install -y -qq llvm-21-dev libclang-21-dev lld-21
 sudo ln -sf /usr/lib/llvm-21/lib/libclang.so /usr/lib/libclang.so
+sudo ln -sf /usr/lib/llvm-21/lib/libclang.so /usr/lib/libclang.so.1
+# V8 脚本按 libclang.so.<主版本> 判断版本；apt 包只有 libclang.so.1，补一个 21 软链
+sudo ln -sf libclang.so /usr/lib/llvm-21/lib/libclang.so.21
 
 # 2. NDK：Gradle 用 28.2.13676358；终端运行时（bash/busybox/proot）用 r29-beta4
 SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
