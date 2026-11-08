@@ -170,9 +170,41 @@ jobs:
           restore-keys: gradle-${{ runner.os }}-
 
       # 终端运行时（bash / busybox / proot / loader + Alpine rootfs）
+      # 上游用 pwsh 脚本下载；在 Linux runner 上改用 curl，避免依赖 pwsh。
       - name: Fetch Android runtime sources
-        shell: pwsh
-        run: pwsh -NoProfile -File tools/android-runtime/fetch_sources.ps1
+        run: |
+          set -euo pipefail
+          RUNTIME=tools/android-runtime
+          mkdir -p "$RUNTIME/downloads" "$RUNTIME/sources"
+          fetch() {
+            local url="$1" archive="$2" sha="$3" extracted="$4"
+            local out="$RUNTIME/downloads/$archive"
+            curl -fsSL --retry 5 --retry-delay 3 -o "$out" "$url"
+            local actual
+            actual=$(sha256sum "$out" | cut -d' ' -f1 | tr 'a-f' 'A-F')
+            if [ "$actual" != "$sha" ]; then
+              echo "::error::$archive SHA256 mismatch: $actual != $sha"; exit 1
+            fi
+            rm -rf "$RUNTIME/sources/$extracted"
+            tar -xf "$out" -C "$RUNTIME/sources"
+          }
+          fetch "https://busybox.net/downloads/busybox-1.38.0.tar.bz2" \
+                "busybox-1.38.0.tar.bz2" \
+                "34F9EA6FF8636F2C9241153B9114EEFA9E65674A45318AE1EF95BB5F31C53BB2" \
+                "busybox-1.38.0"
+          fetch "https://github.com/termux/proot/archive/refs/tags/v5.1.107.78.tar.gz" \
+                "termux-proot-v5.1.107.78.tar.gz" \
+                "F3377BA49DCD833370420C34C5081B4C243ECBB85B2A9881A4F4586012599AFA" \
+                "proot-5.1.107.78"
+          fetch "https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz" \
+                "talloc-2.4.3.tar.gz" \
+                "DC46C40B9F46BB34DD97FE41F548B0E8B247B77A918576733C528E83ABD854DD" \
+                "talloc-2.4.3"
+          fetch "https://ftp.gnu.org/gnu/bash/bash-5.2.37.tar.gz" \
+                "bash-5.2.37.tar.gz" \
+                "9599B22ECD1D5787AD7D3B7BF0C59F312B3396D1E281175DD1F8A4014DA621FF" \
+                "bash-5.2.37"
+          ls -l "$RUNTIME/sources"
 
       - name: Fetch Android runtime NDK
         run: bash tools/android-runtime/fetch_ndk_wsl.sh
