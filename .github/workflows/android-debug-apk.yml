@@ -84,6 +84,7 @@ jobs:
       RUST_TOOLCHAIN_VERSION: 1.95.0
       FVM_VERSION: 4.3.0
       OPERIT_LIBCLANG_DIR: ${{ github.workspace }}\target\operit-build-tools\libclang.runtime.win-x64.21.1.8\runtimes\win-x64\native
+      ANDROID_SDK_ROOT: C:\Program Files (x86)\Android\android-sdk
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -166,6 +167,16 @@ jobs:
           corepack pnpm install --frozen-lockfile
           Pop-Location
 
+      # sync_plugin_packages.py 硬性要求仓库托管的 tsc，
+      # 缺失时报 "TypeScript compiler not found"。
+      - name: Install repository-managed TypeScript
+        shell: pwsh
+        run: |
+          npm install --prefix .ci-tools/typescript --no-audit --no-fund typescript@5.9.3
+          $tsc = ".ci-tools/typescript/node_modules/.bin/tsc.cmd"
+          if (-not (Test-Path $tsc)) { throw "tsc not installed at $tsc" }
+          & $tsc --version
+
       # V8 源码编译是最贵的一步，缓存 Rust bridge 与构建工具。
       - name: Cache Rust bridge target
         uses: actions/cache@v4
@@ -176,6 +187,13 @@ jobs:
           key: rust-bridge-${{ runner.os }}-${{ hashFiles('apps/flutter/native/operit-flutter-bridge/Cargo.lock', 'tools/build_scripts/prepare_android_v8.py') }}
           restore-keys: rust-bridge-${{ runner.os }}-
 
+      # NDK 现场下载安装实测吃掉 8 分钟里的大头，单独缓存。
+      - name: Cache Android NDK
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.ANDROID_SDK_ROOT }}\ndk\28.2.13676358
+          key: ndk-28.2.13676358-${{ runner.os }}
+
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
@@ -184,6 +202,18 @@ jobs:
             ~/.gradle/wrapper
           key: gradle-${{ runner.os }}-${{ hashFiles('apps/flutter/app/android/**/*.gradle*') }}
           restore-keys: gradle-${{ runner.os }}-
+
+      # 放开 Gradle 并行与构建缓存，缩短重复构建。
+      - name: Tune Gradle for CI
+        shell: pwsh
+        run: |
+          $f = "apps/flutter/app/android/gradle.properties"
+          if (-not (Test-Path $f)) { New-Item -ItemType File -Force -Path $f | Out-Null }
+          Add-Content -Path $f -Encoding utf8 -Value @(
+            "org.gradle.parallel=true",
+            "org.gradle.caching=true",
+            "org.gradle.jvmargs=-Xmx6144m -XX:MaxMetaspaceSize=1024m"
+          )
 
       # build.gradle.kts 在配置阶段就无条件创建 release signingConfig 并读取
       # 4 个属性，缺任何一个都会抛 "Missing Android release signing property"，
