@@ -177,6 +177,25 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('apps/flutter/app/android/**/*.gradle*') }}
           restore-keys: gradle-${{ runner.os }}-
 
+      # services.gradle.org 会 307 到 github.com/gradle/gradle-distributions，
+      # 该地址当前返回 504。直接把 wrapper 的 distributionUrl 改到腾讯云镜像。
+      - name: Point Gradle wrapper at a reachable mirror
+        run: |
+          set -euo pipefail
+          WRAPPER=apps/flutter/app/android/gradle/wrapper/gradle-wrapper.properties
+          ZIP="$(grep -oP '(?<=distributionUrl=).*' "$WRAPPER" \
+                 | sed 's#\\:#:#g' | xargs basename)"
+          echo "wrapper distribution zip: $ZIP"
+          MIRROR="https://mirrors.cloud.tencent.com/gradle/$ZIP"
+          # 先确认镜像可用，不可用则保持原样由 wrapper 自行处理。
+          if curl -sIfL --max-time 60 "$MIRROR" > /dev/null; then
+            echo "mirror OK: $MIRROR"
+            sed -i "s#^distributionUrl=.*#distributionUrl=$(printf '%s' "$MIRROR" | sed 's#:#\\\\:#g')#" "$WRAPPER"
+          else
+            echo "::warning::mirror unavailable, keeping original distributionUrl"
+          fi
+          cat "$WRAPPER"
+
       # 终端运行时（bash / busybox / proot / loader + Alpine rootfs）
       # 上游用 pwsh 脚本下载；在 Linux runner 上改用 curl，避免依赖 pwsh。
       - name: Fetch Android runtime sources
