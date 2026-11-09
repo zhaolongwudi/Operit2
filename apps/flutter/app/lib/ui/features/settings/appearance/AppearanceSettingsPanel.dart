@@ -7,8 +7,14 @@ import 'dart:ui' as ui;
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:operit_ui/operit_ui.dart'
-    show themeImageFittedSize, themeImageMaxDimension, themeImageMaxPixels;
+    show
+        ThemeGlassSurfaceGroup,
+        themeImageFittedSize,
+        themeImageMaxDimension,
+        themeImageMaxPixels;
 
+import '../../../../core/bridge/ProxyCoreRuntimeBridge.dart';
+import '../../../../core/proxy/generated/CoreProxyClients.g.dart';
 import '../../../../data/preferences/UserPreferencesManager.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 import '../../chat/components/style/bubble/BubbleSurface.dart';
@@ -33,9 +39,35 @@ const List<_AppearanceSettingsTab> _appearanceSettingsTabs =
     ];
 
 class AppearanceSettingsPanel extends StatelessWidget {
-  const AppearanceSettingsPanel({super.key});
+  const AppearanceSettingsPanel({
+    super.key,
+    this.clients = const GeneratedCoreProxyClients(ProxyCoreRuntimeBridge()),
+  });
 
-  /// Builds the tabbed appearance settings editor with responsive layouts.
+  final GeneratedCoreProxyClients clients;
+
+  /// Opens appearance settings at the visual theme library.
+  @override
+  Widget build(BuildContext context) {
+    return ThemeConfigurationControl(
+      clients: clients,
+      onAppearanceChanged: OperitTheme.of(context).reloadTheme,
+      onEdit: (name) => Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (context) => Scaffold(
+            appBar: AppBar(title: Text(name)),
+            body: const ThemeGlassSurfaceGroup(child: _AppearanceThemeEditor()),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Edits the selected theme with a live preview in each appearance category.
+class _AppearanceThemeEditor extends StatelessWidget {
+  const _AppearanceThemeEditor();
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
@@ -45,7 +77,6 @@ class AppearanceSettingsPanel extends StatelessWidget {
       length: _appearanceSettingsTabs.length,
       child: Column(
         children: <Widget>[
-          const ThemeConfigurationControl(),
           const _AppearanceHeaderBar(),
           Expanded(
             child: TabBarView(
@@ -74,7 +105,7 @@ class AppearanceSettingsPanel extends StatelessWidget {
     return _ResponsivePreviewSplitTabView(
       previewCard: _ChatAppearanceLivePreviewCard(
         snapshot: snapshot,
-        showInputPreview: false,
+        showInputPreview: true,
       ),
       children: <Widget>[
         _SectionCard(
@@ -161,7 +192,7 @@ class AppearanceSettingsPanel extends StatelessWidget {
                   FilledButton.tonalIcon(
                     style: SettingsControlStyles.sectionTextButton(),
                     onPressed: () {
-                      unawaited(_pickCustomFont(themeController));
+                      unawaited(_pickCustomFont(context, themeController));
                     },
                     icon: const Icon(Icons.folder_open_outlined, size: 16),
                     label: Text(l10n.settingsAppearanceChooseCustomFont),
@@ -256,7 +287,7 @@ class AppearanceSettingsPanel extends StatelessWidget {
     return _ResponsivePreviewSplitTabView(
       previewCard: _ChatAppearanceLivePreviewCard(
         snapshot: snapshot,
-        showInputPreview: false,
+        showInputPreview: true,
       ),
       children: <Widget>[
         _SectionCard(
@@ -439,7 +470,7 @@ class AppearanceSettingsPanel extends StatelessWidget {
     return _ResponsivePreviewSplitTabView(
       previewCard: _ChatAppearanceLivePreviewCard(
         snapshot: snapshot,
-        showInputPreview: false,
+        showInputPreview: true,
       ),
       children: <Widget>[
         _SectionCard(
@@ -1018,7 +1049,7 @@ class _ResponsivePreviewSplitTabView extends StatefulWidget {
     required this.children,
   });
 
-  final Widget previewCard;
+  final _ChatAppearanceLivePreviewCard previewCard;
   final List<Widget> children;
 
   @override
@@ -1028,7 +1059,7 @@ class _ResponsivePreviewSplitTabView extends StatefulWidget {
 
 class _ResponsivePreviewSplitTabViewState
     extends State<_ResponsivePreviewSplitTabView> {
-  bool _mobilePreviewExpanded = false;
+  bool _mobilePreviewExpanded = true;
 
   @override
   Widget build(BuildContext context) {
@@ -1070,66 +1101,74 @@ class _ResponsivePreviewSplitTabViewState
         return ListView(
           padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
           children: <Widget>[
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Material(
-                color: colorScheme.surfaceContainerHighest.withValues(
-                  alpha: 0.35,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  side: BorderSide(
-                    color: colorScheme.outlineVariant.withValues(alpha: 0.22),
+            if (!_mobilePreviewExpanded)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Material(
+                  color: colorScheme.surfaceContainerHighest.withValues(
+                    alpha: 0.35,
                   ),
-                ),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(12),
-                  onTap: () {
-                    setState(() {
-                      _mobilePreviewExpanded = !_mobilePreviewExpanded;
-                    });
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 10,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: BorderSide(
+                      color: colorScheme.outlineVariant.withValues(alpha: 0.22),
                     ),
-                    child: Row(
-                      children: <Widget>[
-                        Icon(
-                          Icons.visibility_outlined,
-                          size: 18,
-                          color: colorScheme.primary,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            l10n.settingsAppearanceLivePreviewTitle,
-                            style: Theme.of(context).textTheme.titleSmall
-                                ?.copyWith(fontWeight: FontWeight.w600),
+                  ),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: () {
+                      setState(() {
+                        _mobilePreviewExpanded = !_mobilePreviewExpanded;
+                      });
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      child: Row(
+                        children: <Widget>[
+                          Icon(
+                            Icons.visibility_outlined,
+                            size: 18,
+                            color: colorScheme.primary,
                           ),
-                        ),
-                        SettingsInfoBadge(
-                          label: _mobilePreviewExpanded ? '折叠' : '展开',
-                        ),
-                        const SizedBox(width: 4),
-                        Icon(
-                          _mobilePreviewExpanded
-                              ? Icons.keyboard_arrow_up
-                              : Icons.keyboard_arrow_down,
-                          size: 18,
-                          color: colorScheme.onSurfaceVariant,
-                        ),
-                      ],
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              l10n.settingsAppearanceLivePreviewTitle,
+                              style: Theme.of(context).textTheme.titleSmall
+                                  ?.copyWith(fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                          SettingsInfoBadge(
+                            label: _mobilePreviewExpanded
+                                ? l10n.settingsAppearancePreviewCollapse
+                                : l10n.settingsAppearancePreviewExpand,
+                          ),
+                          const SizedBox(width: 4),
+                          Icon(
+                            _mobilePreviewExpanded
+                                ? Icons.keyboard_arrow_up
+                                : Icons.keyboard_arrow_down,
+                            size: 18,
+                            color: colorScheme.onSurfaceVariant,
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
             if (_mobilePreviewExpanded) ...<Widget>[
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
-                child: widget.previewCard,
+                child: _ChatAppearanceLivePreviewCard(
+                  snapshot: widget.previewCard.snapshot,
+                  showInputPreview: widget.previewCard.showInputPreview,
+                  onCollapse: () =>
+                      setState(() => _mobilePreviewExpanded = false),
+                ),
               ),
             ],
             ...widget.children,
@@ -1144,10 +1183,12 @@ class _ChatAppearanceLivePreviewCard extends StatelessWidget {
   const _ChatAppearanceLivePreviewCard({
     required this.snapshot,
     required this.showInputPreview,
+    this.onCollapse,
   });
 
   final ThemePreferenceSnapshot snapshot;
   final bool showInputPreview;
+  final VoidCallback? onCollapse;
 
   @override
   Widget build(BuildContext context) {
@@ -1155,11 +1196,18 @@ class _ChatAppearanceLivePreviewCard extends StatelessWidget {
     return _SectionCard(
       title: l10n.settingsAppearanceLivePreviewTitle,
       icon: Icons.preview_outlined,
-      action: SettingsInfoBadge(
-        label:
-            '${_messageStyleLabel(l10n, snapshot.userChatStyle)} / '
-            '${_messageStyleLabel(l10n, snapshot.aiChatStyle)}',
-      ),
+      action: onCollapse == null
+          ? SettingsInfoBadge(
+              label:
+                  '${_messageStyleLabel(l10n, snapshot.userChatStyle)} / '
+                  '${_messageStyleLabel(l10n, snapshot.aiChatStyle)}',
+            )
+          : IconButton(
+              tooltip: l10n.settingsAppearancePreviewCollapse,
+              onPressed: onCollapse,
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.keyboard_arrow_up, size: 20),
+            ),
       children: <Widget>[
         ChatAppearancePreview(showInputPreview: showInputPreview),
       ],
@@ -1531,20 +1579,38 @@ Rect _themeImageCropRect(
 }
 
 /// Imports and saves a selected font as the active custom font asset.
-Future<void> _pickCustomFont(OperitThemeController themeController) async {
+Future<void> _pickCustomFont(
+  BuildContext context,
+  OperitThemeController themeController,
+) async {
+  try {
+    final imported = await _selectThemeFont();
+    if (imported == null || !context.mounted) return;
+    await themeController.saveThemeSettings(
+      useCustomFont: true,
+      fontType: UserPreferencesManager.FONT_TYPE_FILE,
+      customFontPath: imported.storagePath,
+    );
+  } catch (error) {
+    _showFontImportError(context, error);
+  }
+}
+
+Future<ThemeAssetImport?> _selectThemeFont() async {
   const fontGroup = XTypeGroup(
     label: 'font',
     extensions: <String>['ttf', 'otf', 'ttc'],
+    uniformTypeIdentifiers: <String>['public.font'],
   );
   final file = await openFile(acceptedTypeGroups: <XTypeGroup>[fontGroup]);
-  if (file == null) {
-    return;
-  }
-  final imported = await ThemeAssetStore().importFile(file);
-  await themeController.saveThemeSettings(
-    useCustomFont: true,
-    fontType: UserPreferencesManager.FONT_TYPE_FILE,
-    customFontPath: imported.storagePath,
+  return file == null ? null : ThemeAssetStore().importFontFile(file);
+}
+
+void _showFontImportError(BuildContext context, Object error) {
+  if (!context.mounted) return;
+  final l10n = AppLocalizations.of(context)!;
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text(l10n.settingsAppearanceThemeConfigFailed('$error'))),
   );
 }
 
@@ -1575,22 +1641,17 @@ Future<void> _showBubbleFontDialog(
       return StatefulBuilder(
         builder: (context, setDialogState) {
           Future<void> pickFontFile() async {
-            const fontGroup = XTypeGroup(
-              label: 'font',
-              extensions: <String>['ttf', 'otf', 'ttc'],
-            );
-            final file = await openFile(
-              acceptedTypeGroups: <XTypeGroup>[fontGroup],
-            );
-            if (file == null) {
-              return;
+            try {
+              final imported = await _selectThemeFont();
+              if (imported == null || !context.mounted) return;
+              setDialogState(() {
+                useCustomFont = true;
+                fontType = UserPreferencesManager.FONT_TYPE_FILE;
+                customFontPath = imported.storagePath;
+              });
+            } catch (error) {
+              _showFontImportError(context, error);
             }
-            final imported = await ThemeAssetStore().importFile(file);
-            setDialogState(() {
-              useCustomFont = true;
-              fontType = UserPreferencesManager.FONT_TYPE_FILE;
-              customFontPath = imported.storagePath;
-            });
           }
 
           return OperitDialogScaffold(

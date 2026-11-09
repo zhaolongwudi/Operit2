@@ -99,8 +99,10 @@ operit2-cli-linux-aarch64-2.0.0-preview.16.tar.gz
 operit2-cli-macos-x86_64-2.0.0-preview.16.tar.gz
 operit2-cli-macos-aarch64-2.0.0-preview.16.tar.gz
 operit2-app-android-arm64-v8a-2.0.0-preview.16.apk
+operit2-module-android-arm64-v8a-2.0.0-preview.16.zip
 operit2-app-ohos-arm64-2.0.0-preview.16.hap
 operit2-app-windows-x86_64-2.0.0-preview.16.zip
+operit2-app-windows-x86_64-2.0.0-preview.16.msi
 operit2-app-linux-x86_64-2.0.0-preview.16.tar.gz
 operit2-app-macos-universal-2.0.0-preview.16.zip
 operit2-app-ios-arm64-2.0.0-preview.16.zip
@@ -110,6 +112,38 @@ operit2-firmware-esp32-2432s028-2.0.0-preview.16.zip
 
 Release packages are published without separate checksum files. CLI archives
 contain the executable, installer script, uninstaller script, and README.
+
+Windows App builds produce both a portable ZIP and a Chinese MSI installer from
+the same Flutter release directory. The MSI installs for the current user under
+`%LOCALAPPDATA%\Programs\Operit2`, creates desktop and Start menu shortcuts, and
+registers repair/uninstall in Windows Settings. Upgrades replace the application
+files and preserve the separate user data directory. The ZIP remains the updater's
+download format. Both packages include the Visual C++ runtime DLLs from the build
+toolchain so users do not need to install a separate redistributable.
+
+MSI packaging requires the .NET 8 SDK or newer. The build restores the pinned WiX
+4.0.6 tool and the DTF custom UI dependency from NuGet. The MSI embeds a WPF
+interface with a custom title bar; Windows 10 1809 x64 or newer includes its .NET
+Framework 4.7.2 runtime. Silent MSI installs continue to use `/qn` without opening
+the interface. Run the normal Windows build to produce both formats:
+
+```powershell
+.\.venv\Scripts\python.exe tools/build_scripts/build_flutter_windows.py --enforce-lockfile
+```
+
+To package an already-built, current-version release directory without recompiling:
+
+```powershell
+.\.venv\Scripts\python.exe tools/build_scripts/build_windows_msi.py
+```
+
+Installer sources and branding live in `tools/windows-installer`; the accessible,
+vector UI is implemented in WPF under `ui/`. MSI's three-number version encodes
+`major.minor.(patch * 1000 + revision)`.
+Revisions use dev 1–199, preview 201–399, rc 401–599, and stable 999. Counters above
+199, unsupported prerelease identifiers, and MSI field overflow fail explicitly.
+The MSI's description and release filename retain the full SemVer. Major upgrades
+block downgrades; rebuilding the same release can replace its previous MSI install.
 
 The filename version matches the Git tag without its leading `v`. The updater
 builds the exact filename from each release's own tag and the requested product,
@@ -122,6 +156,14 @@ not treat a CLI-only release as an App update. Packages with another version,
 architecture, or product do not match the requested release asset. The Actions
 artifact collector accepts the exact current-version package names; publishing
 rejects outdated names and unrelated files in the distribution directory.
+
+Update discovery loads release pages lazily, starting with the most recent 30
+releases. It skips releases without the exact platform and architecture package
+or outside the installed version's channel. Once a page contains compatible
+packages, it selects the highest SemVer on that page and stops requesting older
+pages. An older page is loaded only when the current page has no compatible
+package. The selected version is offered only when newer than the installed
+version; discovery does not downgrade an installed application.
 
 ## Version Sources
 
@@ -149,6 +191,15 @@ For `2.0.0-preview.1`, the Flutter platform version is:
 The build and publish scripts use the full Operit2 SemVer for Git tags and updater metadata. The Flutter `major.minor.patch` must match the Operit2 release version. Flutter `buildNumber` is only platform package metadata for Android, Windows, Linux, and macOS builds.
 
 For App and full runs, the build release script builds with the current Flutter `buildNumber` and then increments `apps/flutter/app/pubspec.yaml` by 1 after all selected App assets succeed. CLI-only runs do not change the Flutter `buildNumber`.
+
+Android modules are an App type included in App/full releases. Their installer
+ZIP is a distinct `module` release product. `module.prop` uses the shared full
+release version and the same Flutter `buildNumber` as `versionCode`. Both Android
+forms must succeed before the App/full release increments the build number once.
+The application directory builder remains `apps/android-module/build.py`;
+`tools/build_scripts/build_android_module_release.py` builds the directory and
+packages its contents at ZIP root. It can also run independently with
+`--enforce-lockfile`, using current version sources.
 
 ## Build Release Script
 
@@ -233,7 +284,7 @@ macOS Flutter Build       macOS App and/or CLI
 iOS Flutter Build         unsigned iOS App
 Windows Release Build     Windows App and/or CLI
 Linux Release Build       Linux App and/or CLI
-Android Flutter Build     signed Android APKs
+Android Flutter Build     signed Android APK and module installer ZIP
 ```
 
 Android Flutter Build requires these repository secrets:
@@ -387,3 +438,9 @@ cargo run --manifest-path apps/cli/Cargo.toml -- tui --update-current-version 0.
 ```
 
 Use a prerelease current version such as `0.0.0-preview.0` to test preview releases. A stable current version such as `0.0.0` selects the stable channel and ignores GitHub prereleases.
+
+## Peer protocol compatibility
+
+App/CLI release versions do not control Core or Edge pairing, routing or synchronization.
+See [Core / Edge protocol versioning](peer-protocol-versioning.md) for the independent integer protocol version,
+build-time source fingerprint, and required version increments. Runtime checks compare only the protocol version.

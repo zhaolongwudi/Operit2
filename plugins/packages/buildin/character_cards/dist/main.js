@@ -141,7 +141,7 @@ __export(main_exports, {
   onMemoryCommand: () => onMemoryCommand,
   onMemoryInterval: () => onMemoryInterval,
   onMemoryMessagePersisted: () => onMemoryMessagePersisted,
-  onMemoryRecallPromptFinalize: () => onMemoryRecallPromptFinalize,
+  onMemoryRecallPromptInput: () => onMemoryRecallPromptInput,
   onServiceInitialize: () => onServiceInitialize,
   onTagCommand: () => onTagCommand,
   parseActivePromptCommand: () => parseActivePromptCommand,
@@ -4197,6 +4197,31 @@ var DatabaseMemoryRepository = class {
       this.snapshots.delete(state);
     });
   }
+  /** Changes only failed candidates in bounded pages under their exact source and owner versions. */
+  recoverFailedCandidates(ownerKey, producerNodeId) {
+    return __async(this, null, function* () {
+      const owner2 = yield this.owner(ownerKey), now = Date.now();
+      let count = 0, after = "";
+      for (; ; ) {
+        const rows = yield this.memoryDatabase.select("candidates", ownerKey, "json_extract(value,'$.record.status')='failed'", [], 100, after);
+        if (rows.length === 0) return count;
+        yield this.commit(
+          rows.map(
+            /** Preserves concurrent status changes through the exact candidate version. */
+            (row) => producerNodeId === null ? remove({ collection: "candidates", ...row }) : put(
+              "candidates",
+              row.key,
+              { ...row.value, record: { ...row.value.record, producerNodeId, status: "pending", lastError: "", updatedAt: now } },
+              row.version
+            )
+          ),
+          [{ collection: "owners", key: ownerKey, expectedVersion: owner2.version }]
+        );
+        count += rows.length;
+        after = rows[rows.length - 1].key;
+      }
+    });
+  }
   /** Computes record-level mutations only for explicitly selected records. */
   diff(before, after) {
     const previous = new Map(before.map(
@@ -6256,35 +6281,6 @@ function enqueueCandidate(input, repository2) {
     return result2;
   });
 }
-function retryFailedCandidates(ownerKey, repository2) {
-  return __async(this, null, function* () {
-    const space = yield repository2.readMemoryJobState(ownerKey), now = Date.now(), producerNodeId = yield memoryJobProducer();
-    let retried = 0;
-    for (const candidate of space.candidates) if (candidate.status === "failed") {
-      candidate.producerNodeId = producerNodeId;
-      candidate.status = "pending";
-      candidate.lastError = "";
-      candidate.updatedAt = now;
-      retried += 1;
-    }
-    if (retried !== 0) yield repository2.writeMemoryJobState(ownerKey, space);
-    return { retried };
-  });
-}
-function clearFailedCandidates(ownerKey, repository2) {
-  return __async(this, null, function* () {
-    const space = yield repository2.readMemoryJobState(ownerKey);
-    const remaining = space.candidates.filter(
-      /** Retains pending and processing records for their real owners. */
-      (candidate) => candidate.status !== "failed"
-    ), cleared = space.candidates.length - remaining.length;
-    if (cleared !== 0) {
-      space.candidates = remaining;
-      yield repository2.writeMemoryJobState(ownerKey, space);
-    }
-    return { cleared };
-  });
-}
 function startMemoryRebuild(ownerKey, rebuild, repository2) {
   return __async(this, null, function* () {
     assertObject(rebuild, "memory rebuild");
@@ -7674,14 +7670,9 @@ function dispatch(request, host) {
           host
         );
       case "retryFailedCandidates":
-        return executeDomain(
-          "memory.candidates.retryFailed",
-          { ownerKey: "ownerKey" in request ? request.ownerKey : yield menuMemoryOwner(request.chatId, host) },
-          host
-        );
       case "clearFailedCandidates":
         return executeDomain(
-          "memory.candidates.clearFailed",
+          request.action === "retryFailedCandidates" ? "memory.candidates.retryFailed" : "memory.candidates.clearFailed",
           { ownerKey: "ownerKey" in request ? request.ownerKey : yield menuMemoryOwner(request.chatId, host) },
           host
         );
@@ -8034,9 +8025,13 @@ var handlers = {
   /** Enqueues only actual persisted message sources and genuine bound owners. */
   "memory.candidate.enqueue": (input, repository2) => enqueueCandidate(input, repository2),
   /** Returns genuine terminal failures to the pending queue for one later interval retry. */
-  "memory.candidates.retryFailed": (input, repository2) => retryFailedCandidates(input.ownerKey, repository2),
+  "memory.candidates.retryFailed": (input, repository2) => __async(null, null, function* () {
+    return { retried: yield repository2.recoverFailedCandidates(input.ownerKey, yield memoryJobProducer()) };
+  }),
   /** Removes genuine terminal failures from the owner queue. */
-  "memory.candidates.clearFailed": (input, repository2) => clearFailedCandidates(input.ownerKey, repository2),
+  "memory.candidates.clearFailed": (input, repository2) => __async(null, null, function* () {
+    return { cleared: yield repository2.recoverFailedCandidates(input.ownerKey, null) };
+  }),
   /** Resolves chat configuration using this operation's existing repository snapshot. */
   "chat.configuration.resolve": (input, repository2) => resolveConfiguration(input, {
     /** Reads only the requested character. */
@@ -10692,7 +10687,8 @@ function registerDomainApis() {
 }
 
 // src/memory-recall.ts
-var MEMORY_RECALL_MARKER = '<memory_context source="character-memory">';
+var MEMORY_RECALL_MARKER = '<attachment id="character_memory_recall"';
+var LEGACY_MEMORY_RECALL_MARKER = '<memory_context source="character-memory">';
 var MODEL_PARTICIPANT_ID = "model:chat";
 function collapse(value, maxLength) {
   const normalized = String(value ?? "").replace(/\s+/gu, " ").trim();
@@ -10710,9 +10706,12 @@ function executionParticipant(payload) {
   if (chatId === "" || participantId === "" || participantId === MODEL_PARTICIPANT_ID) return null;
   return { chatId, participantId };
 }
+function escapeXml(value) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
 function memoryBlock(result2) {
   if (result2.memories.length === 0) return null;
-  const lines2 = [MEMORY_RECALL_MARKER, "\u3010\u76F8\u5173\u8BB0\u5FC6\u3011", `\u547D\u4E2D\u6570\u91CF: ${result2.memories.length}`];
+  const lines2 = ["\u3010\u76F8\u5173\u8BB0\u5FC6\u3011", `\u547D\u4E2D\u6570\u91CF: ${result2.memories.length}`];
   result2.memories.forEach((memory, index) => {
     lines2.push(
       `#${index + 1}`,
@@ -10723,17 +10722,17 @@ function memoryBlock(result2) {
     if (memory.tags.length > 0) lines2.push(`\u6807\u7B7E: ${memory.tags.map((tag) => collapse(tag, 40)).join(", ")}`);
     if (memory.chunkInfo !== null) lines2.push(`\u5206\u5757: ${collapse(memory.chunkInfo, 80)}`);
   });
-  lines2.push("</memory_context>");
-  return lines2.join("\n");
+  const content = lines2.join("\n");
+  return `${MEMORY_RECALL_MARKER} filename="\u76F8\u5173\u8BB0\u5FC6" type="text/plain" size="${content.length}">${escapeXml(content)}</attachment>`;
 }
-function onMemoryRecallPromptFinalize(event) {
+function onMemoryRecallPromptInput(event) {
   return __async(this, null, function* () {
     const stage = String(event.eventPayload.stage ?? event.eventName ?? "");
-    if (stage !== "before_send_to_model") return null;
+    if (stage !== "before_process") return null;
     const participant = executionParticipant(event.eventPayload);
     if (participant === null) return null;
     const processedInput = String(event.eventPayload.processedInput ?? event.eventPayload.rawInput ?? "");
-    if (processedInput.includes(MEMORY_RECALL_MARKER)) return null;
+    if (processedInput.includes(MEMORY_RECALL_MARKER) || processedInput.includes(LEGACY_MEMORY_RECALL_MARKER)) return null;
     const query = searchQuery(processedInput);
     if (query === "") return null;
     try {
@@ -10752,7 +10751,7 @@ ${block}`;
   });
 }
 function registerMemoryRecallHook() {
-  ToolPkg.registerPromptFinalizeHook({ id: "character-memory-recall", function: onMemoryRecallPromptFinalize });
+  ToolPkg.registerPromptInputHook({ id: "character-memory-recall", function: onMemoryRecallPromptInput });
 }
 
 // src/chat-lifecycle.ts

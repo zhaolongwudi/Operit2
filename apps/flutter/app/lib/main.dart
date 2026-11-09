@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:desktop_widgets/desktop_widgets.dart';
 import 'package:floating_windows/floating_windows.dart';
+import 'package:fvp/fvp.dart' as fvp;
 import 'package:operit_keep_alive/operit_keep_alive.dart';
 import 'package:operit_ui/operit_ui.dart'
     show prepareLiquidGlass, OperitDesignCaptureScope;
@@ -39,6 +40,7 @@ void main(List<String> arguments) async {
       final launch =
           await platformCoreProxy.dataRescue({'operation': 'launchMode'})
               as Map;
+      final clientOnly = launch['clientOnly'] == true;
       if (isDataRescueLaunch(
         arguments: arguments,
         route: PlatformDispatcher.instance.defaultRouteName,
@@ -56,6 +58,7 @@ void main(List<String> arguments) async {
         applicationStarted = true;
         return;
       }
+      fvp.registerWith();
       await platformCoreProxy.dataRescue({'operation': 'runtimeLease'});
       consumeGitHubOAuthWebCallbackAtStartup();
       final bindingElapsedMs = bindingStopwatch.elapsedMilliseconds;
@@ -142,17 +145,21 @@ void main(List<String> arguments) async {
                   await SystemChrome.setEnabledSystemUIMode(
                     SystemUiMode.edgeToEdge,
                   );
-                  await OperitKeepAlive.instance.initialize(
-                    const KeepAliveOptions(
-                      applicationName: 'Operit2',
-                      androidServiceClassName: 'app.operit.OperitCoreService',
-                      openLabel: '打开 Operit2',
-                      exitLabel: '退出 Operit2',
-                      quitMessage: '退出将停止后台任务。确定退出 Operit2？',
-                    ),
-                  );
+                  if (!clientOnly) {
+                    await OperitKeepAlive.instance.initialize(
+                      const KeepAliveOptions(
+                        applicationName: 'Operit2',
+                        androidServiceClassName: 'app.operit.OperitCoreService',
+                        openLabel: '打开 Operit2',
+                        exitLabel: '退出 Operit2',
+                        quitMessage: '退出将停止后台任务。确定退出 Operit2？',
+                      ),
+                    );
+                  }
                   final coreStopwatch = Stopwatch()..start();
-                  CoreApplicationService.instance.initialize();
+                  CoreApplicationService.instance.initialize(
+                    ownsRuntime: !clientOnly,
+                  );
                   ClientLogger.v(
                     'core application initialize dispatched elapsedMs=${coreStopwatch.elapsedMilliseconds}',
                     tag: _appStartupLogTag,

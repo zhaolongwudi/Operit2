@@ -893,7 +893,13 @@ impl ChatServiceCore {
     #[operit_route_macros::operit_core_route(binding = chatId)]
     pub async fn cancelMessage(&mut self, chatId: String) -> Result<(), String> {
         let turn = self.messageProcessingDelegate.readCurrentTurnCancellationSnapshot(chatId.clone());
-        let partialMessage = self.messageProcessingDelegate.cancelMessage(chatId.clone()).await;
+        let partialMessage = match self.messageProcessingDelegate.cancelMessage(chatId.clone()).await {
+            Ok(message) => message,
+            Err(error) => {
+                self.messageProcessingDelegate.failTurnReceipt(&chatId, error.clone());
+                return Err(error);
+            }
+        };
         if let (Some(turn), Some(partial)) = (turn, &partialMessage) {
             if turn.turnOptions.persistTurn {
             if let Err(error) = self.chatHistoryDelegate.commitAssistantMessageSegment(chatId.clone(), partial.clone(), None) {
@@ -1253,7 +1259,7 @@ impl ChatServiceCore {
         }
         self.messageProcessingDelegate
             .cancelMessageForDestructiveMutation(chatId.clone())
-            .await;
+            .await?;
         let backupChatId = chatId.clone();
         let backupWorkspacePath = self
             .chatHistoryDelegate
@@ -1283,7 +1289,7 @@ impl ChatServiceCore {
         self.chatHistoryDelegate.prepareChatForDestructiveMutation(chatId.clone());
         self.messageProcessingDelegate
             .cancelMessageForDestructiveMutation(chatId.clone())
-            .await;
+            .await?;
         self.pendingQueueStateFlow().update(|queues| {
             queues.remove(&chatId);
         });
@@ -1420,19 +1426,19 @@ impl ChatServiceCore {
     #[allow(non_snake_case)]
     pub async fn insertSummary(&mut self, message: ChatMessage) -> bool {
         if message.sender != "user" && message.sender != "ai" {
-            return false;
+            return self.summaryInsertionFailed(None, "只能在用户或 AI 消息处插入总结".to_string());
         }
         let Some(currentChatId) = self.chatHistoryDelegate.currentChatIdFlow.value() else {
-            return false;
+            return self.summaryInsertionFailed(None, "当前没有打开的对话".to_string());
         };
         let Some(mut enhancedAiService) = self.newEnhancedAiServiceForChat(&currentChatId) else {
-            return false;
+            return self.summaryInsertionFailed(Some(currentChatId), "AI 服务尚未就绪".to_string());
         };
         self.messageProcessingDelegate
             .setInputProcessingStateForChat(
                 currentChatId.clone(),
                 InputProcessingState::Summarizing {
-                    message: "chat_summarizing_generating".to_string(),
+                    message: String::new(),
                 },
             );
         let beforeTimestamp = if message.sender == "ai" {
@@ -1452,9 +1458,7 @@ impl ChatServiceCore {
             .filter(|message| message.sender == "user" || message.sender == "ai")
             .collect::<Vec<_>>();
         if messagesToSummarize.is_empty() {
-            self.messageProcessingDelegate
-                .setInputProcessingStateForChat(currentChatId, InputProcessingState::Idle);
-            return false;
+            return self.summaryInsertionFailed(Some(currentChatId), "所选位置之前没有可总结的消息".to_string());
         }
         let configuration = match enhancedAiService.resolveChatConfigurationForOptions(
             &operit_providers::chat::EnhancedAIService::SendMessageOptions {
@@ -1464,72 +1468,41 @@ impl ChatServiceCore {
         ).await {
             Ok(configuration) => configuration,
             Err(error) => {
-                self.messageProcessingDelegate
-                    .setInputProcessingStateForChat(
-                        currentChatId,
-                        InputProcessingState::Error { message: error.to_string() },
-                    );
-                return false;
+                return self.summaryInsertionFailed(Some(currentChatId), error.to_string());
             }
         };
-        let startTime = currentTimeMillis();
-        let pendingPlaceholder = ChatMessage {
-            sender: "summary".to_string(),
-            timestamp: ChatMessageTimestampAllocator::next(),
-            roleName: "system".to_string(),
-            sentAt: startTime,
-            ..ChatMessage::new("summary".to_string())
-        };
-        let persistedPending = self.chatHistoryDelegate.addSummaryMessage(
-            pendingPlaceholder,
-            beforeTimestamp.clone(),
-            afterTimestamp.clone(),
-            Some(currentChatId.clone()),
-        );
-
+        // Generation must not persist a summary boundary before valid content exists.
         let summaryMessage = match AIMessageManager::summarizeMemory(
             &mut enhancedAiService,
             messagesToSummarize,
             false,
             currentChatId.clone(),
             &configuration,
+            None,
         )
         .await
+        .map_err(|error| error.to_string())
+        .and_then(|summary| summary.ok_or_else(|| "No valid conversation summary was generated".to_string()))
         {
-            Ok(Some(summaryMessage)) => summaryMessage,
-            _ => {
-                if let Some(pending) = persistedPending {
-                    let _ = self.chatHistoryDelegate.deleteMessageByTimestamp(currentChatId.clone(), pending.timestamp);
-                }
-                self.messageProcessingDelegate
-                    .setInputProcessingStateForChat(currentChatId, InputProcessingState::Idle);
-                return false;
+            Ok(summaryMessage) => summaryMessage,
+            Err(error) => {
+                AppLogger::e("ChatSummary", &format!("Summary insertion failed for {currentChatId}: {error}"));
+                return self.summaryInsertionFailed(Some(currentChatId), error);
             }
         };
 
-        if let Some(pending) = persistedPending {
-            let updated = ChatMessage {
-                parts: summaryMessage.parts,
-                inputTokens: summaryMessage.inputTokens,
-                outputTokens: summaryMessage.outputTokens,
-                waitDurationMs: summaryMessage.waitDurationMs,
-                completedAt: summaryMessage.completedAt,
-                sentAt: summaryMessage.sentAt,
-                ..pending
-            };
-            self.chatHistoryDelegate.updateSummaryMessage(updated, Some(currentChatId.clone()));
-        } else {
-            self.chatHistoryDelegate.addSummaryMessage(
-                summaryMessage,
-                beforeTimestamp,
-                afterTimestamp,
-                Some(currentChatId.clone()),
-            );
+        if self.chatHistoryDelegate.addSummaryMessage(
+            summaryMessage,
+            beforeTimestamp,
+            afterTimestamp,
+            Some(currentChatId.clone()),
+        ).is_none() {
+            return self.summaryInsertionFailed(Some(currentChatId), "所选位置无法插入总结，请检查相邻位置是否已有总结".to_string());
         }
         if let Some(delegate) = self.messageCoordinationDelegate.as_mut() {
             delegate.chatHistoryDelegate = self.chatHistoryDelegate.clone_for_core();
             delegate.messageProcessingDelegate = self.messageProcessingDelegate.clone_for_core();
-            delegate
+            let refreshedWindow = delegate
                 .refreshStableContextWindow(
                     &mut enhancedAiService,
                     Some(currentChatId.clone()),
@@ -1540,10 +1513,27 @@ impl ChatServiceCore {
                 .await;
             self.chatHistoryDelegate = delegate.chatHistoryDelegate.clone_for_core();
             self.messageProcessingDelegate = delegate.messageProcessingDelegate.clone_for_core();
+            if refreshedWindow.is_none() {
+                // The summary is already persisted. Keep the refresh error visible
+                // instead of clearing it to Idle with stale context statistics.
+                return true;
+            }
         }
         self.messageProcessingDelegate
             .setInputProcessingStateForChat(currentChatId, InputProcessingState::Idle);
         true
+    }
+
+    /// Reports manual-summary failures through the application's notice surface.
+    #[allow(non_snake_case)]
+    fn summaryInsertionFailed(&mut self, chatId: Option<String>, reason: String) -> bool {
+        if let Some(chatId) = chatId {
+            self.messageProcessingDelegate
+                .setInputProcessingStateForChat(chatId, InputProcessingState::Idle);
+        }
+        self.messageProcessingDelegate
+            .showToast(format!("插入总结失败：{reason}"));
+        false
     }
 
     /// Returns branch chats that were derived from the requested parent chat.

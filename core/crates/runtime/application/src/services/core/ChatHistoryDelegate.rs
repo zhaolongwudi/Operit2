@@ -139,6 +139,9 @@ fn preserveLiveMessageStreams(
         let Some(previousMessage) = liveMessages.get(&message.timestamp) else {
             continue;
         };
+        if previousMessage.selectedVariantIndex != message.selectedVariantIndex {
+            continue;
+        }
         message.contentStream = previousMessage.contentStream.clone();
         message.parts = previousMessage.parts.clone();
         message.completedAt = previousMessage.completedAt;
@@ -1002,24 +1005,24 @@ impl ChatHistoryDelegate {
     }
 
     #[allow(non_snake_case)]
-    /// Loads messages used when inserting or refreshing conversation summaries.
+    /// Loads visible messages after the latest summary within the insertion target range.
     pub fn loadMessagesForSummaryInsertion(
         &self,
         chatId: String,
         beforeTimestampExclusive: Option<i64>,
         upToTimestampInclusive: Option<i64>,
     ) -> Vec<ChatMessage> {
-        self.getRuntimeChatHistory(chatId)
+        self.chatHistoryManager
+            .loadMessagesAfterLatestSummaryInRange(
+                chatId,
+                beforeTimestampExclusive,
+                upToTimestampInclusive,
+            )
+            .expect("ChatHistoryManager.loadMessagesAfterLatestSummaryInRange must succeed")
             .into_iter()
             .filter(|message| {
-                beforeTimestampExclusive
-                    .map(|ts| message.timestamp < ts)
-                    .unwrap_or(true)
-            })
-            .filter(|message| {
-                upToTimestampInclusive
-                    .map(|ts| message.timestamp <= ts)
-                    .unwrap_or(true)
+                message.displayMode
+                    != operit_model::ChatMessageDisplayMode::ChatMessageDisplayMode::HIDDEN_PLACEHOLDER
             })
             .collect()
     }
@@ -1846,7 +1849,7 @@ impl ChatHistoryDelegate {
         self.chatHistoryManager
             .selectMessageVariant(chatId.clone(), timestamp, selectedVariantIndex)
             .expect("ChatHistoryManager.selectMessageVariant must select the requested variant");
-        self.reloadCurrentChatDisplayHistory(chatId);
+        self.reloadCurrentChatDisplayHistoryWithInvalidatedRevision(chatId, Some(timestamp));
     }
 
     #[allow(non_snake_case)]
@@ -1870,7 +1873,10 @@ impl ChatHistoryDelegate {
             .expect("The newly persisted exact variant must be readable");
         ToolPkgChatMessageHookBridge::dispatchMessagePersisted(&chatId, &persistedVariant);
         if self.currentChatIdFlow.value().as_ref() == Some(&chatId) {
-            self.reloadCurrentChatDisplayHistory(chatId.clone());
+            self.reloadCurrentChatDisplayHistoryWithInvalidatedRevision(
+                chatId.clone(),
+                Some(timestamp),
+            );
         }
         ChainLogger::verbose(
             MESSAGE_STORE_CHAIN,
@@ -2390,20 +2396,20 @@ impl ChatHistoryDelegate {
         &mut self,
         chatId: String,
         message: ChatMessage,
-        chatMetrics: Option<(i64, i64, i64)>,
+        currentWindowSize: Option<i64>,
     ) -> Result<SyncClock, String> {
         AppLogger::trace(
             "ChatFlowTrace",
             &format!(
-                "commit_assistant.start chatId={} metricsSet={} {}",
+                "commit_assistant.start chatId={} windowSizeSet={} {}",
                 chatId,
-                chatMetrics.is_some(),
+                currentWindowSize.is_some(),
                 chat_message_trace_summary(&message)
             ),
         );
         let clock = self
             .chatHistoryManager
-            .commitAssistantMessageSegment(chatId.clone(), message.clone(), chatMetrics)
+            .commitAssistantMessageSegment(chatId.clone(), message.clone(), currentWindowSize)
             .map_err(|error| error.to_string())?;
         let mut persistedMessage = self
             .chatHistoryManager
@@ -2556,26 +2562,6 @@ impl ChatHistoryDelegate {
             self.reloadCurrentChatDisplayHistory(chatId);
         }
         Some(persisted)
-    }
-
-    #[allow(non_snake_case)]
-    /// Updates an existing summary message and notifies the display history flow.
-    pub fn updateSummaryMessage(
-        &mut self,
-        message: ChatMessage,
-        chatIdOverride: Option<String>,
-    ) {
-        let Some(chatId) = chatIdOverride.or_else(|| self.currentChatIdFlow.value()) else {
-            return;
-        };
-        let isCurrentChat = self.currentChatIdFlow.value().as_ref() == Some(&chatId);
-        let persisted = Self::persistentChatMessage(message);
-        self.chatHistoryManager
-            .updateMessage(chatId.clone(), persisted)
-            .expect("updateMessage must succeed");
-        if isCurrentChat {
-            self.reloadCurrentChatDisplayHistory(chatId);
-        }
     }
 
     #[allow(non_snake_case)]

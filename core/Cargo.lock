@@ -2205,6 +2205,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "spake2",
  "syn 2.0.117",
  "tokio",
@@ -2378,6 +2379,7 @@ name = "operit-proxy-local"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64",
  "operit-command-core",
  "operit-edge-contract",
  "operit-host-api",
@@ -2403,6 +2405,7 @@ dependencies = [
  "operit-util",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "wasm-bindgen-futures",
  "zip",
@@ -2456,7 +2459,7 @@ dependencies = [
 
 [[package]]
 name = "operit-runtime"
-version = "2.0.0-preview.27"
+version = "2.0.0-preview.30"
 dependencies = [
  "aes",
  "async-trait",
@@ -2564,6 +2567,7 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "sha2",
+ "syn 2.0.117",
  "thiserror 1.0.69",
  "tokio",
  "url",
