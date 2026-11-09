@@ -29,11 +29,41 @@ jobs:
         with:
           sdk: 3.11.5
 
+      # 缓存 1：源码编译的 Android V8（最耗时；上游同款路径）
+      # 由 tools/build_scripts/prepare_android_v8.py 写入 CACHE_ROOT
+      - name: Cache source-built Android V8
+        uses: actions/cache@v4
+        with:
+          path: tools/release/work/android-v8
+          key: ${{ runner.os }}-${{ runner.arch }}-android-v8-${{ hashFiles('tools/build_scripts/prepare_android_v8.py', 'apps/flutter/native/operit-flutter-bridge/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-android-v8-
+
+      # 缓存 2：Rust 编译产物（bridge 的 target 目录）
+      - name: Cache Rust target
+        uses: actions/cache@v4
+        with:
+          path: |
+            apps/flutter/native/operit-flutter-bridge/target/aarch64-linux-android
+            apps/flutter/native/operit-flutter-bridge/target/operit-v8
+          key: ${{ runner.os }}-rust-android-${{ hashFiles('apps/flutter/native/operit-flutter-bridge/Cargo.lock', 'core/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-android-
+
+      # 缓存 3：Android 终端运行时交叉编译产物
+      - name: Cache android runtime build
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/operit-android-runtime/build
+          key: ${{ runner.os }}-android-runtime-${{ hashFiles('tools/android-runtime/build_android_tools_wsl.sh', 'tools/android-runtime/build_alpine_rootfs_wsl.sh', 'tools/android-runtime/downloads/**') }}
+          restore-keys: |
+            ${{ runner.os }}-android-runtime-
+
       - name: Drop unreachable aliyun mirrors (CI only)
         run: |
           f=apps/flutter/app/android/settings.gradle.kts
           echo "== before =="; grep -n "aliyun" "$f" || true
-          sed -i '/maven\\.aliyun\\.com/d' "$f"
+          sed -i '/maven\.aliyun\.com/d' "$f"
           echo "== after =="; grep -n "aliyun" "$f" || true
 
       - name: Build release APK
