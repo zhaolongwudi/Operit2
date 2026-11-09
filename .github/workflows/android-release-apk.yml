@@ -1,8 +1,10 @@
 name: android-release-apk
 
-# 手动触发，产出可直接安装的 release APK（临时签名，不依赖仓库 secrets）。
-# 与 android-debug-apk.yml 并存，互不影响：那条线继续出 debug 包，这条线只出 16KB 设备可用的 release 包。
+# 自动触发：main 上每次 push 构建一次，也可手动触发。
+# 产出可直接安装的 release APK（临时签名，不依赖仓库 secrets）。
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -31,7 +33,7 @@ jobs:
         run: |
           f=apps/flutter/app/android/settings.gradle.kts
           echo "== before =="; grep -n "aliyun" "$f" || true
-          sed -i '/maven\.aliyun\.com/d' "$f"
+          sed -i '/maven\\.aliyun\\.com/d' "$f"
           echo "== after =="; grep -n "aliyun" "$f" || true
 
       - name: Build release APK
