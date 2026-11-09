@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "toolpkg_id": "com.operit.dsh_providers_hub",
+  "version": "0.1.0",
+  "author": "Operit",
+  "main": "dist/main.js",
+  "display_name": {
+    "zh": "Jet Hub",
+    "en": "Jet Hub",
+    "default": "Jet Hub"
+  },
+  "description": {
+    "zh": "在 Operit 侧栏内嵌 Jet Hub（DeepSeek Harness + dsh-providers-hub 插件），统一管理多家 AI 编程服务的账号池与模型，点开即用。",
+    "en": "Embeds Jet Hub (DeepSeek Harness + dsh-providers-hub) in the Operit sidebar to manage AI coding provider accounts and models.",
+    "default": "Embeds Jet Hub in the Operit sidebar to manage AI coding provider accounts and models."
+  },
+  "enabled_by_default": true,
+  "logo": "jet_hub_logo",
+  "subpackages": [
+    {
+      "id": "dsh_providers_hub",
+      "entry": "dist/packages/dsh_providers_hub.js",
+      "enabled_by_default": true,
+      "display_name": {
+        "zh": "Jet Hub 服务",
+        "en": "Jet Hub Service"
+      },
+      "description": {
+        "zh": "启停 Jet Hub 本地服务，查询状态、网关密钥与可用模型。",
+        "en": "Start or stop the local Jet Hub service and inspect status, gateway key, and models."
+      }
+    }
+  ],
+  "resources": [
+    {
+      "key": "jet_hub_logo",
+      "path": "resource/logo.svg",
+      "mime": "image/svg+xml"
+    }
+  ],
+  "workflow_templates": [],
+  "workspace_templates": []
+}

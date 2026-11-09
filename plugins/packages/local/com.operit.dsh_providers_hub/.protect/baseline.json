@@ -1,0 +1,12 @@
+{
+  "_comment": "本文件是 plugins/packages/local/com.operit.dsh_providers_hub 的保护基线，由 sha256 记录每个受保护文件。任何不经意的修改、删除或上游合并带来的改动，都会让 check_local_plugins.js 报告异常。更新插件后请重新生成基线。",
+  "protected_root": "plugins/packages/local/com.operit.dsh_providers_hub",
+  "files": {
+    "dist/main.js": "acc9c8cd7a936888fed56f555b0c96b4ea8ca73df9f715585c66e57519ce2634",
+    "dist/packages/dsh_providers_hub.js": "4d8c9e824dd9abc3e88d8fc882cccb1c2f6b65ecfefcce299c84ec79baaa427b",
+    "dist/shared/runtime.js": "198cdd03d76a3253cc2943adf5f1a2779cd149cd1f7e90d63c83ed65862d581d",
+    "dist/ui/hub.ui.js": "d09c7c12ed7a05fb57519c8a10db0935dc42600ad0b959f760dc488a4f3e77e7",
+    "manifest.json": "153ce0e19c2c1798090e9f10f369c4548e29904af506a622640bfb639860ee2b",
+    "resource/logo.svg": "ba251fb636aed6bbdbb7df37200d2ead93316f9da5d5336d8475e2c2823238aa"
+  }
+}
