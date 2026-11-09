@@ -27,6 +27,13 @@ jobs:
         with:
           sdk: 3.11.5
 
+      - name: Drop unreachable aliyun mirrors (CI only)
+        run: |
+          f=apps/flutter/app/android/settings.gradle.kts
+          echo "== before =="; grep -n "aliyun" "$f" || true
+          sed -i '/maven\.aliyun\.com/d' "$f"
+          echo "== after =="; grep -n "aliyun" "$f" || true
+
       - name: Build release APK
         run: bash tools/build_release_apk.sh
 
