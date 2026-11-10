@@ -1,14 +1,14 @@
 name: android-release-apk
 
 # 自动触发：main 上每次 push 构建一次，也可手动触发。
-# 产出可直接安装的 release APK（临时签名，不依赖仓库 secrets）。
+# 产出可直接安装的 release APK，并发布到 Release 的固定下载地址。
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: android-release-apk-${{ github.ref }}
@@ -30,7 +30,6 @@ jobs:
           sdk: 3.11.5
 
       # 缓存 1：源码编译的 Android V8（最耗时；上游同款路径）
-      # 由 tools/build_scripts/prepare_android_v8.py 写入 CACHE_ROOT
       - name: Cache source-built Android V8
         uses: actions/cache@v4
         with:
@@ -75,10 +74,35 @@ jobs:
           APK=apps/flutter/app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
           ls -lh "$APK" || true
 
-      - name: Upload release APK
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: operit2-release-apk
           path: apps/flutter/app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
           if-no-files-found: error
           retention-days: 30
+
+      # 发布到 Release：资产名固定，配合 releases/latest 得到永久下载地址
+      - name: Publish release
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          APK=apps/flutter/app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          [ -f "$APK" ] || { echo "APK 不存在，跳过发布"; exit 1; }
+
+          # 资产名固定，保证 latest/download 链接稳定
+          cp "$APK" operit2-arm64-v8a.apk
+
+          TAG="build-$(date -u +%Y%m%d-%H%M)"
+          SHA="$(git rev-parse --short HEAD)"
+
+          gh release create "$TAG" operit2-arm64-v8a.apk \
+            --title "自用构建 ${TAG}" \
+            --notes "基于 commit ${SHA} 自动构建。
+
+固定下载地址：
+https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/operit2-arm64-v8a.apk" \
+            --latest
+
+          echo "发布完成：${TAG}"

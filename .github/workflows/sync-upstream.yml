@@ -1,0 +1,100 @@
+name: sync-upstream
+
+# 每天自动把上游 AAswordman/Operit2 的更新合并进本仓库。
+# 冲突策略：以上游为准（用户指定）。合并后强制恢复本地插件目录，避免被上游覆盖。
+on:
+  schedule:
+    # UTC 20:00 = 北京时间 04:00，覆盖上游当天全部提交
+    - cron: "0 20 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Configure git
+        run: |
+          git config user.name "operit-sync-bot"
+          git config user.email "sync-bot@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/AAswordman/Operit2.git
+          git fetch upstream main --no-tags
+
+      - name: Detect upstream changes
+        id: detect
+        run: |
+          set -euo pipefail
+          BEHIND=$(git rev-list --count HEAD..upstream/main)
+          echo "behind=$BEHIND" >> "$GITHUB_OUTPUT"
+          echo "上游领先本仓库 $BEHIND 个提交"
+          if [ "$BEHIND" -eq 0 ]; then
+            echo "已是最新，跳过"
+          fi
+
+      - name: Merge upstream (theirs on conflict)
+        if: steps.detect.outputs.behind != '0'
+        run: |
+          set -euo pipefail
+          # -X theirs：文本冲突时以上游为准
+          git merge upstream/main \
+            --no-edit \
+            -X theirs \
+            -m "chore(sync): 合并上游 $(date -u +%Y-%m-%d)" \
+          || {
+            echo "::warning::自动合并不完全成功，尝试以上游为准整树恢复"
+            git checkout --theirs . 2>/dev/null || true
+            git add -A
+            git commit -m "chore(sync): 上游更新（冲突以上游为准） $(date -u +%Y-%m-%d)" || true
+          }
+
+      - name: Restore local plugin (hard protection)
+        if: steps.detect.outputs.behind != '0'
+        run: |
+          set -euo pipefail
+          PLUGIN=plugins/packages/local/com.operit.dsh_providers_hub
+          BASE="$(git rev-parse HEAD~1)"
+          echo "== 检查插件目录是否被上游改动 =="
+          if git diff --name-only "$BASE" HEAD -- "$PLUGIN" | grep -q .; then
+            echo "::error::上游改动触及本地插件目录，已强制恢复"
+            git diff --name-only "$BASE" HEAD -- "$PLUGIN"
+            git checkout "$BASE" -- "$PLUGIN"
+            git add -A
+            git commit -m "fix(sync): 恢复被上游触及的本地插件目录" || true
+          else
+            echo "插件目录未被触碰，无需恢复"
+          fi
+
+      - name: Verify plugin protection baseline
+        if: steps.detect.outputs.behind != '0'
+        run: |
+          set -euo pipefail
+          P=plugins/packages/local/com.operit.dsh_providers_hub
+          if [ -f "$P/.protect/check_local_plugins.js" ]; then
+            node "$P/.protect/check_local_plugins.js" || echo "::warning::保护区校验未通过，请人工确认"
+          else
+            echo "校验脚本不存在，跳过"
+          fi
+
+      - name: Push
+        if: steps.detect.outputs.behind != '0'
+        run: |
+          set -euo pipefail
+          git push origin HEAD:main
+
+      - name: Report
+        run: |
+          echo "### 同步结果" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 上游领先提交数：${{ steps.detect.outputs.behind }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 当前 HEAD：$(git rev-parse --short HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 插件目录：plugins/packages/local/com.operit.dsh_providers_hub" >> "$GITHUB_STEP_SUMMARY"
